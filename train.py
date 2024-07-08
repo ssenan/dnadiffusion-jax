@@ -140,8 +140,8 @@ def create_checkpoint_manager(
 
 
 def create_mesh_and_model(batch_size: int) -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array, int]:
-    # jax.distributed.initialize()
-    jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
+    jax.distributed.initialize()
+    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
 
     if jax.process_index() == 0:
         print("Number of devices: ", jax.device_count())
@@ -416,7 +416,7 @@ if __name__ == "__main__":
     train(
         batch_size=120,
         sample_epoch=10,
-        checkpoint_epoch=500,
+        checkpoint_epoch=10,
         number_of_samples=1000,
-        use_wandb=False,
+        use_wandb=True,
     )
