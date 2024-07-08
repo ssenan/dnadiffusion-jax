@@ -304,6 +304,9 @@ def train(
     absolute_path = os.path.abspath(os.getcwd())
     # Join the absolute path with the relative path
     path = os.path.join(absolute_path, "jax_checkpoints")
+    # Create folder if it does not exist
+    if not os.path.exists(path):
+        os.makedirs(path)
 
     checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch", "global_step"))
 
