@@ -16,6 +16,10 @@ def one_hot_encode(seq, alphabet, max_seq_len):
     return seq_array
 
 
+def convert_to_seq_jax(x, alphabet):
+    return "".join([alphabet[i] for i in x])
+
+
 def l2_norm(x):
     return x / jnp.sqrt(jnp.sum(x**2, axis=2, keepdims=True) + 1e-8)
 

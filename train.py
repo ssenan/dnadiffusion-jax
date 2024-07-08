@@ -7,7 +7,7 @@ import orbax.checkpoint as ocp
 import wandb
 from flax.training.train_state import TrainState
 from jax import numpy as jnp
-from jax.experimental import mesh_utils
+from jax.experimental import mesh_utils, multihost_utils
 from jax.experimental.shard_map import shard_map
 from jax.sharding import NamedSharding, PartitionSpec as P
 from orbax.checkpoint.checkpoint_manager import (
@@ -20,7 +20,7 @@ from dnadiffusion.data.dataloader import load_data
 from dnadiffusion.models.diffusion import p_loss
 from dnadiffusion.models.unet import UNet
 from dnadiffusion.utils.sample_util import create_sample
-from dnadiffusion.utils.utils import diffusion_params
+from dnadiffusion.utils.utils import convert_to_seq_jax, diffusion_params
 
 
 def train_step(
@@ -101,24 +101,24 @@ def sample_step(
     timesteps: int,
     sample_bs: int,
     sequence_length: int,
+    group_number: int,
     number_of_samples: int,
     d_params: dict[str, jnp.ndarray],
     cell_num_list: list,
 ) -> jnp.ndarray:
-    for i in cell_num_list:
-        samples = create_sample(
-            state=state,
-            rng=rng,
-            timesteps=timesteps,
-            diffusion_params=d_params,
-            cell_types=cell_num_list,
-            number_of_samples=number_of_samples,
-            sample_bs=sample_bs,
-            sequence_length=sequence_length,
-            group_number=i,
-            cond_weight_to_metric=1,
-        )
-        return samples
+    samples = create_sample(
+        state=state,
+        rng=rng,
+        timesteps=timesteps,
+        diffusion_params=d_params,
+        cell_types=cell_num_list,
+        number_of_samples=number_of_samples,
+        sample_bs=sample_bs,
+        sequence_length=sequence_length,
+        group_number=group_number,
+        cond_weight_to_metric=1,
+    )
+    return samples
 
 
 def create_checkpoint_manager(
@@ -171,7 +171,7 @@ def create_mesh_and_model(batch_size: int) -> tuple[jax.sharding.Mesh, NamedShar
     return mesh, repl_sharding, data_sharding, data_spec, rng, batch_size
 
 
-def get_dataset(debug: bool = True) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int]]:
+def get_dataset(debug: bool = True) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int], dict]:
     encode_data = load_data(
         data_path="dnadiffusion/data/K562_hESCT0_HepG2_GM12878_12k_sequences_per_group.txt",
         saved_data_path="dnadiffusion/data/encode_data.pkl",
@@ -198,8 +198,9 @@ def get_dataset(debug: bool = True) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarr
         y_val_data = encode_data["x_val_cell_type"]
 
     cell_num_list = encode_data["cell_types"]
+    numeric_to_tag_dict = encode_data["numeric_to_tag"]
 
-    return x_data, y_data, x_val_data, y_val_data, cell_num_list
+    return x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag_dict
 
 
 def train(
@@ -272,7 +273,6 @@ def train(
 
     # Diffusion parameters
     timesteps = 50
-    # d_params = diffusion_params(timesteps=50, beta_start=0.0001, beta_end=0.005)
     d_params = diffusion_params(timesteps=50, beta_start=0.0001, beta_end=0.2)
 
     def batch_sharding(batch):
@@ -294,7 +294,7 @@ def train(
         return x, y
 
     # Training
-    x_data, y_data, x_val_data, y_val_data, cell_num_list = get_dataset()
+    x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag = get_dataset()
     train_dataset_size = len(x_data)
     train_steps_per_epoch = np.ceil(train_dataset_size / batch_size).astype(int)
     val_dataset_size = len(x_val_data)
@@ -357,7 +357,7 @@ def train(
             rng, sample_rng = jax.random.split(rng)
 
             with mesh:
-                samples = jax.jit(
+                sample_fn = jax.jit(
                     sample_step,
                     in_shardings=(
                         None,
@@ -367,17 +367,27 @@ def train(
                         repl_sharding,
                     ),
                     out_shardings=repl_sharding,
-                    static_argnums=(3, 4, 5),
-                )(state_dp, sample_rng, timesteps, 1, 200, number_of_samples, d_params, cell_num_list)
-            print(f"Samples shape: {samples.shape}")
+                    static_argnums=(3, 4, 5, 6),
+                )
+                for i in cell_num_list:
+                    samples = sample_fn(
+                        state_dp,
+                        sample_rng,
+                        timesteps,
+                        1,
+                        200,
+                        i,
+                        number_of_samples,
+                        d_params,
+                        cell_num_list,
+                    )
 
-            # if jax.process_index() == 0:
-            #     collected_samples = multihost_utils.process_allgather(samples)
-            #     sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
-            #     sequences = jax.device_get(sequences)
-            #     print(f"Saving sequences for {encode_data['numeric_to_tag'][i.shape[0]]}")
-            #     with open(f"./{encode_data['numeric_to_tag'][i.shape[0]]}.txt", "w") as f:
-            #         f.write("\n".join(sequences))
+                    collected_samples = multihost_utils.process_allgather(samples)
+                    if jax.process_index() == 0:
+                        sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
+                        sequences = jax.device_get(sequences)
+                        with open(f"./{numeric_to_tag[i]}.txt", "w") as f:
+                            f.write("\n".join(sequences))
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # Save checkpoint
@@ -396,10 +406,17 @@ def train(
 
 
 if __name__ == "__main__":
+    # train(
+    #     batch_size=1,
+    #     sample_epoch=1,
+    #     checkpoint_epoch=500,
+    #     number_of_samples=1,
+    #     use_wandb=False,
+    # )
     train(
-        batch_size=1,
-        sample_epoch=1,
+        batch_size=120,
+        sample_epoch=10,
         checkpoint_epoch=500,
-        number_of_samples=1,
+        number_of_samples=1000,
         use_wandb=False,
     )
