@@ -273,6 +273,20 @@ def train(
             tx=tx,
         )
 
+    with mesh:
+        sample_fn = jax.jit(
+            sample_step,
+            in_shardings=(
+                None,
+                repl_sharding,
+                repl_sharding,
+                repl_sharding,
+                repl_sharding,
+            ),
+            out_shardings=repl_sharding,
+            static_argnums=(3, 4, 5, 6),
+        )
+
     # Diffusion parameters
     timesteps = 50
     d_params = diffusion_params(timesteps=50, beta_start=0.0001, beta_end=0.2)
@@ -361,38 +375,26 @@ def train(
             # Sampling
             rng, sample_rng = jax.random.split(rng)
 
-            with mesh:
-                sample_fn = jax.jit(
-                    sample_step,
-                    in_shardings=(
-                        None,
-                        repl_sharding,
-                        repl_sharding,
-                        repl_sharding,
-                        repl_sharding,
-                    ),
-                    out_shardings=repl_sharding,
-                    static_argnums=(3, 4, 5, 6),
+            for i in cell_num_list:
+                samples = sample_fn(
+                    state_dp,
+                    sample_rng,
+                    timesteps,
+                    1,
+                    200,
+                    i,
+                    number_of_samples,
+                    d_params,
+                    cell_num_list,
                 )
-                for i in cell_num_list:
-                    samples = sample_fn(
-                        state_dp,
-                        sample_rng,
-                        timesteps,
-                        1,
-                        200,
-                        i,
-                        number_of_samples,
-                        d_params,
-                        cell_num_list,
-                    )
+                print(samples.shape)
 
-                    collected_samples = multihost_utils.process_allgather(samples)
-                    if jax.process_index() == 0:
-                        sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
-                        sequences = jax.device_get(sequences)
-                        with open(f"./{numeric_to_tag[i]}.txt", "w") as f:
-                            f.write("\n".join(sequences))
+                collected_samples = multihost_utils.process_allgather(samples)
+                if jax.process_index() == 0:
+                    sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
+                    sequences = jax.device_get(sequences)
+                    with open(f"./{numeric_to_tag[i]}.txt", "w") as f:
+                        f.write("\n".join(sequences))
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # Save checkpoint
