@@ -257,11 +257,13 @@ def train(
 
     # Data parallel init
     with mesh:
-        params = jax.jit(
+        params_fn = jax.jit(
             unet.init,
             in_shardings=(repl_sharding, data_sharding, data_sharding, data_sharding),
             out_shardings=repl_sharding,
-        )(init_rng, x_init, t_init, class_init)
+        )
+
+        params = params_fn(init_rng, x_init, t_init, class_init)
 
         # opt_shape = jax.eval_shape(tx.init, params_shape)
 
