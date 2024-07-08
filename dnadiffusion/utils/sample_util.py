@@ -14,11 +14,11 @@ def create_sample(
     group_number,
     cond_weight_to_metric,
 ):
-    timesteps = timesteps.shape[0]
-    number_of_samples = number_of_samples.shape[0]
-    sample_bs = sample_bs.shape[0]
-    sequence_length = sequence_length.shape[0]
-    group_number = group_number.shape[0]
+    # timesteps = timesteps.shape[0]
+    # number_of_samples = number_of_samples.shape[0]
+    # sample_bs = sample_bs.shape[0]
+    # sequence_length = sequence_length.shape[0]
+    # group_number = group_number.shape[0]
 
     @jax.jit
     def sample_batch(rng):

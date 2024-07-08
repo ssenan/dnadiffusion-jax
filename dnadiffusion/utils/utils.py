@@ -3,13 +3,14 @@ from functools import partial
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax.training import train_state
 
 
 def one_hot_encode(seq, alphabet, max_seq_len):
     """One-hot encode a sequence."""
     seq_len = len(seq)
-    seq_array = jnp.zeros((max_seq_len, len(alphabet)))
+    seq_array = np.zeros((max_seq_len, len(alphabet)))
     for i in range(seq_len):
         seq_array[i, alphabet.index(seq[i])] = 1
     return seq_array

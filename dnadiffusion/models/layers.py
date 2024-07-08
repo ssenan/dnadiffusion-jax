@@ -6,6 +6,8 @@ import jax
 from flax import linen as nn
 from jax import lax, numpy as jnp
 
+from dnadiffusion.utils.utils import l2_norm
+
 
 class ResBlock(nn.Module):
     features: int
