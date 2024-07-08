@@ -252,6 +252,7 @@ def train(
     )
 
     if jax.process_index() == 0 and use_wandb:
+        wandb.login()
         id = wandb.util.generate_id()
         wandb.init(project="dnadiffusion", id=id)
 
