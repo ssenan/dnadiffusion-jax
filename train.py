@@ -1,5 +1,3 @@
-import os
-
 import jax
 import numpy as np
 import optax
@@ -122,17 +120,14 @@ def sample_step(
 
 
 def create_checkpoint_manager(
-    checkpoint_dir: str,
-    item_names: tuple,
-    save_interval_steps: int = 1,
-    use_async: bool = True,
+    checkpoint_dir: str, item_names: tuple, save_interval_steps: int = 1, use_async: bool = True
 ) -> CheckpointManager:
     manager = CheckpointManager(
         checkpoint_dir,
         item_names=item_names,
         options=CheckpointManagerOptions(
             create=True,
-            save_interval_steps=save_interval_steps,
+            # save_interval_steps=save_interval_steps,
             enable_async_checkpointing=use_async,
         ),
     )
@@ -171,7 +166,7 @@ def create_mesh_and_model(batch_size: int) -> tuple[jax.sharding.Mesh, NamedShar
     return mesh, repl_sharding, data_sharding, data_spec, rng, batch_size
 
 
-def get_dataset(debug: bool = True) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int], dict]:
+def get_dataset(debug: bool = False) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int], dict]:
     encode_data = load_data(
         data_path="dnadiffusion/data/K562_hESCT0_HepG2_GM12878_12k_sequences_per_group.txt",
         saved_data_path="dnadiffusion/data/encode_data.pkl",
@@ -316,14 +311,11 @@ def train(
     val_dataset_size = len(x_val_data)
     val_steps_per_epoch = np.ceil(val_dataset_size / batch_size).astype(int)
 
-    # Get current absolute path
-    absolute_path = os.path.abspath(os.getcwd())
-    # Join the absolute path with the relative path
-    path = os.path.join(absolute_path, "jax_checkpoints")
-    # Create folder if it does not exist
-    if not os.path.exists(path):
-        os.makedirs(path)
-
+    # Checkpointing
+    # path = Path("checkpoints")
+    # path = path.absolute()
+    # path.mkdir(parents=True, exist_ok=True)
+    path = "gs://dnadiffusion-bucket/checkpoints/"
     checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch", "global_step"))
 
     num_epochs = 2200
@@ -389,7 +381,8 @@ def train(
                 )
                 print(samples.shape)
 
-                collected_samples = multihost_utils.process_allgather(samples)
+                collected_samples = multihost_utils.process_allgather(samples, tiled=True)
+                print(collected_samples.shape)
                 if jax.process_index() == 0:
                     sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
                     sequences = jax.device_get(sequences)
@@ -398,6 +391,7 @@ def train(
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # Save checkpoint
+            multihost_utils.sync_global_devices("checkpoint")
             checkpoint_manager.save(
                 global_step,
                 args=ocp.args.Composite(
@@ -406,6 +400,7 @@ def train(
                     global_step=ocp.args.JsonSave(global_step),
                 ),
             )
+            checkpoint_manager.wait_until_finished()
 
     if jax.process_index() == 0 and use_wandb:
         wandb.finish()
@@ -415,15 +410,15 @@ def train(
 if __name__ == "__main__":
     # train(
     #     batch_size=1,
-    #     sample_epoch=1,
-    #     checkpoint_epoch=500,
+    #     sample_epoch=200,
+    #     checkpoint_epoch=1,
     #     number_of_samples=1,
     #     use_wandb=False,
     # )
     train(
         batch_size=120,
-        sample_epoch=10,
-        checkpoint_epoch=10,
+        sample_epoch=5000,
+        checkpoint_epoch=5,
         number_of_samples=1000,
         use_wandb=True,
     )
