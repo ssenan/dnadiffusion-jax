@@ -316,7 +316,7 @@ def train(
     # path = path.absolute()
     # path.mkdir(parents=True, exist_ok=True)
     path = "gs://dnadiffusion-bucket/checkpoints/"
-    checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch", "global_step"))
+    checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch"))
 
     num_epochs = 2200
     global_step = 0
@@ -391,13 +391,11 @@ def train(
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # Save checkpoint
-            multihost_utils.sync_global_devices("checkpoint")
             checkpoint_manager.save(
-                global_step,
+                state_dp.step,
                 args=ocp.args.Composite(
-                    state=ocp.args.StandardSave(state_dp),
+                    state=ocp.args.PyTreeSave(state_dp),
                     epoch=ocp.args.JsonSave(epoch),
-                    global_step=ocp.args.JsonSave(global_step),
                 ),
             )
             checkpoint_manager.wait_until_finished()
@@ -418,7 +416,7 @@ if __name__ == "__main__":
     train(
         batch_size=120,
         sample_epoch=5000,
-        checkpoint_epoch=5,
+        checkpoint_epoch=10,
         number_of_samples=1000,
         use_wandb=True,
     )
