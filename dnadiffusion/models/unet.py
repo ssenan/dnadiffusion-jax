@@ -1,5 +1,6 @@
 from typing import Optional
 
+import jax
 from flax import linen as nn
 from jax import numpy as jnp
 
@@ -29,7 +30,7 @@ class UNet(nn.Module):
     dtype: jnp.dtype = jnp.float32
 
     @nn.compact
-    def __call__(self, x, time, classes):
+    def __call__(self, x: jax.Array, time: jax.Array, classes: jax.Array):
         init_dim = self.dim if self.init_dim is None else self.init_dim
         x = nn.Conv(init_dim, (7, 7), padding=3)(x)
         r = x
