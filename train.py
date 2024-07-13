@@ -1,3 +1,6 @@
+from typing import Any
+
+import flax.linen as nn
 import jax
 import numpy as np
 import optax
@@ -21,183 +24,6 @@ from dnadiffusion.utils.sample_util import create_sample
 from dnadiffusion.utils.utils import convert_to_seq_jax, diffusion_params
 
 
-def train_step(
-    state: TrainState,
-    rng: jax.Array,
-    x: jnp.ndarray,
-    classes: jnp.ndarray,
-    timesteps: int,
-    d_params: dict[
-        str,
-        int,
-    ],
-) -> tuple[TrainState, jnp.float32]:
-    # rng = jax.random.fold_in(rng, jax.lax.axis_index("data"))
-    rng, step_rng = jax.random.split(rng)
-
-    def loss_fn(params):
-        return p_loss(
-            rng=step_rng,
-            state=state.replace(params=params),
-            x=x,
-            classes=classes,
-            timesteps=timesteps,
-            diffusion_params=d_params,
-        )
-
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grads = grad_fn(state.params)
-
-    # Average gradients and loss across data parallel devices
-    grads = jax.lax.pmean(grads, axis_name="data")
-    loss = jax.lax.pmean(loss, axis_name="data")
-
-    # Optimizer update
-    updates, opt_state = state.tx.update(grads, state.opt_state, state.params)
-
-    # Model update
-    params = optax.apply_updates(state.params, updates)
-
-    new_state = state.replace(
-        params=params,
-        opt_state=opt_state,
-        step=state.step + 1,
-    )
-
-    return new_state, loss
-
-
-def val_step(
-    state: TrainState,
-    rng: jax.Array,
-    x: jnp.ndarray,
-    classes: jnp.ndarray,
-    timesteps: int,
-    d_params: dict[str, int],
-) -> jnp.float32:
-    rng, step_rng = jax.random.split(rng)
-
-    def loss_fn(params):
-        return p_loss(
-            rng=step_rng,
-            state=state.replace(params=params),
-            x=x,
-            classes=classes,
-            timesteps=timesteps,
-            diffusion_params=d_params,
-        )
-
-    loss = loss_fn(state.params)
-    loss = jax.lax.pmean(loss, axis_name="data")
-
-    return loss
-
-
-def sample_step(
-    state: TrainState,
-    rng: jax.Array,
-    timesteps: int,
-    sample_bs: int,
-    sequence_length: int,
-    group_number: int,
-    number_of_samples: int,
-    d_params: dict[str, jnp.ndarray],
-    cell_num_list: list,
-) -> jnp.ndarray:
-    samples = create_sample(
-        state=state,
-        rng=rng,
-        timesteps=timesteps,
-        diffusion_params=d_params,
-        cell_types=cell_num_list,
-        number_of_samples=number_of_samples,
-        sample_bs=sample_bs,
-        sequence_length=sequence_length,
-        group_number=group_number,
-        cond_weight_to_metric=1,
-    )
-    return samples
-
-
-def create_checkpoint_manager(
-    checkpoint_dir: str, item_names: tuple, save_interval_steps: int = 1, use_async: bool = True
-) -> CheckpointManager:
-    manager = CheckpointManager(
-        checkpoint_dir,
-        item_names=item_names,
-        options=CheckpointManagerOptions(
-            create=True,
-            # save_interval_steps=save_interval_steps,
-            enable_async_checkpointing=use_async,
-        ),
-    )
-    return manager
-
-
-def create_mesh_and_model(batch_size: int) -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array, int]:
-    jax.distributed.initialize()
-    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
-
-    if jax.process_index() == 0:
-        print("Number of devices: ", jax.device_count())
-        print("Local devices: ", jax.local_device_count())
-
-    devices = mesh_utils.create_device_mesh((jax.device_count(),))
-    mesh = jax.sharding.Mesh(devices, ("data",))
-    repl_sharding = NamedSharding(
-        mesh,
-        P(),
-    )
-
-    data_sharding = NamedSharding(
-        mesh,
-        P(
-            "data",
-        ),
-    )
-    data_spec = P(
-        "data",
-    )
-
-    rng = jax.random.PRNGKey(0)
-
-    batch_size = batch_size * jax.device_count()
-
-    return mesh, repl_sharding, data_sharding, data_spec, rng, batch_size
-
-
-def get_dataset(debug: bool = False) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int], dict]:
-    encode_data = load_data(
-        data_path="dnadiffusion/data/K562_hESCT0_HepG2_GM12878_12k_sequences_per_group.txt",
-        saved_data_path="dnadiffusion/data/encode_data.pkl",
-        subset_list=[
-            "GM12878_ENCLB441ZZZ",
-            "hESCT0_ENCLB449ZZZ",
-            "K562_ENCLB843GMH",
-            "HepG2_ENCLB029COU",
-        ],
-        limit_total_sequences=0,
-        num_sampling_to_compare_cells=1000,
-        load_saved_data=True,
-    )
-    if debug:
-        x_data = encode_data["X_train"][:1]
-        y_data = encode_data["x_train_cell_type"][:1]
-        x_val_data = encode_data["X_val"][:1]
-        y_val_data = encode_data["x_val_cell_type"][:1]
-
-    else:
-        x_data = encode_data["X_train"]
-        y_data = encode_data["x_train_cell_type"]
-        x_val_data = encode_data["X_val"]
-        y_val_data = encode_data["x_val_cell_type"]
-
-    cell_num_list = encode_data["cell_types"]
-    numeric_to_tag_dict = encode_data["numeric_to_tag"]
-
-    return x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag_dict
-
-
 def train(
     batch_size: int,
     sample_epoch: int,
@@ -211,19 +37,10 @@ def train(
     rng, init_rng = jax.random.split(rng)
     unet = UNet(dim=200, resnet_block_groups=4)
     tx = optax.adam(1e-4)
-    x_init = jnp.ones((16, 4, 200, 1), jnp.float32)
-    class_init = jnp.ones((16,), jnp.int32)
-    t_init = jnp.ones((16,), jnp.int32)
 
-    # state_shape, state_spec = get_abstract_state(
-    #     x_init.shape,
-    #     t_init.shape,
-    #     class_init.shape,
-    #     unet,
-    #     tx,
-    #     rng,
-    # )
+    state, shardings = init_train_state(unet, init_rng, mesh, tx)
 
+    timesteps = 50
     d_params = diffusion_params(timesteps=50, beta_start=0.0001, beta_end=0.2)
 
     train_step_fn = jax.jit(
@@ -246,28 +63,6 @@ def train(
         )
     )
 
-    if jax.process_index() == 0 and use_wandb:
-        id = wandb.util.generate_id()
-        wandb.init(project="dnadiffusion", id=id)
-
-    # Data parallel init
-    with mesh:
-        params_fn = jax.jit(
-            unet.init,
-            in_shardings=(repl_sharding, data_sharding, data_sharding, data_sharding),
-            out_shardings=repl_sharding,
-        )
-
-        params = params_fn(init_rng, x_init, t_init, class_init)
-
-        # opt_shape = jax.eval_shape(tx.init, params_shape)
-
-        state_dp = TrainState.create(
-            apply_fn=unet.apply,
-            params=params["params"],
-            tx=tx,
-        )
-
     with mesh:
         sample_fn = jax.jit(
             sample_step,
@@ -282,9 +77,9 @@ def train(
             static_argnums=(3, 4, 5, 6),
         )
 
-    # Diffusion parameters
-    timesteps = 50
-    d_params = diffusion_params(timesteps=50, beta_start=0.0001, beta_end=0.2)
+    if jax.process_index() == 0 and use_wandb:
+        id = wandb.util.generate_id()
+        wandb.init(project="dnadiffusion", id=id)
 
     def batch_sharding(batch):
         def per_device_init_fn(index):
@@ -292,10 +87,6 @@ def train(
 
         global_input = jax.make_array_from_callback(batch.shape, data_sharding, per_device_init_fn)
         return global_input
-
-    if jax.process_index() == 0 and use_wandb:
-        id = wandb.util.generate_id()
-        wandb.init(project="dnadiffusion", id=id)
 
     @jax.jit
     def get_batch(rng, dataset):
@@ -330,7 +121,7 @@ def train(
             x = batch_sharding(x)
             y = batch_sharding(y)
             # x, y = next(train_loader)
-            state_dp, loss = train_step_fn(state_dp, rngs[1], x, y, timesteps, d_params)
+            state, loss = train_step_fn(state, rngs[1], x, y, timesteps, d_params)
             global_step += 1
 
             if jax.process_index() == 0 and use_wandb:
@@ -349,7 +140,7 @@ def train(
             x_val = batch_sharding(x_val)
             y_val = batch_sharding(y_val)
             # x_val, y_val = next(val_loader)
-            val_loss = val_step_fn(state_dp, rngs[1], x_val, y_val, timesteps, d_params)
+            val_loss = val_step_fn(state, rngs[1], x_val, y_val, timesteps, d_params)
 
         print(f"Epoch: {epoch}, Step: {global_step}, val_loss:{val_loss:.4f}, loss: {loss:.4f}")
 
@@ -392,9 +183,9 @@ def train(
         if (epoch + 1) % checkpoint_epoch == 0:
             # Save checkpoint
             checkpoint_manager.save(
-                state_dp.step,
+                state.step,
                 args=ocp.args.Composite(
-                    state=ocp.args.PyTreeSave(state_dp),
+                    state=ocp.args.PyTreeSave(state),
                     epoch=ocp.args.JsonSave(epoch),
                 ),
             )
@@ -403,6 +194,201 @@ def train(
     if jax.process_index() == 0 and use_wandb:
         wandb.finish()
         print("Finished training")
+
+
+def create_mesh_and_model(batch_size: int) -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array, int]:
+    jax.distributed.initialize()
+    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
+
+    if jax.process_index() == 0:
+        print("Number of devices: ", jax.device_count())
+        print("Local devices: ", jax.local_device_count())
+
+    mesh = jax.sharding.Mesh(mesh_utils.create_device_mesh((jax.device_count(),)), ("data",))
+    repl_sharding = NamedSharding(
+        mesh,
+        P(),
+    )
+
+    data_sharding = NamedSharding(
+        mesh,
+        P(
+            "data",
+        ),
+    )
+    data_spec = P(
+        "data",
+    )
+
+    rng = jax.random.PRNGKey(0)
+
+    batch_size = batch_size * jax.device_count()
+
+    return mesh, repl_sharding, data_sharding, data_spec, rng, batch_size
+
+
+def init_train_state(
+    model: nn.Module, rng: jax.Array, mesh: jax.sharding.Mesh, tx: optax.GradientTransformation
+) -> tuple[TrainState, Any]:
+    x = jax.ShapeDtypeStruct((16, 4, 200, 1), jnp.float32)
+    t = jax.ShapeDtypeStruct((16,), jnp.int32)
+    classes = jax.ShapeDtypeStruct((16,), jnp.int32)
+
+    def init(rng, x, t, classes):
+        params = model.init(rng, x, t, classes)
+        return TrainState.create(apply_fn=model.apply, params=params["params"], tx=tx)
+
+    params = jax.eval_shape(init, rng, x, t, classes)
+    shardings = nn.get_sharding(params, mesh)
+    state = jax.jit(init, out_shardings=shardings)(rng, x, t, classes)
+    return state, shardings
+
+
+def train_step(
+    state: TrainState,
+    rng: jax.Array,
+    x: jax.Array,
+    classes: jax.Array,
+    timesteps: int,
+    d_params: dict[
+        str,
+        int,
+    ],
+    sharding: dict[str, NamedSharding] | None = None,
+) -> tuple[TrainState, jnp.float32]:
+    rng, step_rng = jax.random.split(rng)
+    if sharding is not None:
+        x = jax.lax.with_sharding_constraint(x, sharding)
+        classes = jax.lax.with_sharding_constraint(classes, sharding)
+
+    def loss_fn(params):
+        return p_loss(
+            rng=step_rng,
+            state=state.replace(params=params),
+            x=x,
+            classes=classes,
+            timesteps=timesteps,
+            diffusion_params=d_params,
+        )
+
+    grad_fn = jax.value_and_grad(loss_fn)
+    loss, grads = grad_fn(state.params)
+
+    # Optimizer update
+    updates, opt_state = state.tx.update(grads, state.opt_state, state.params)
+
+    # Model update
+    params = optax.apply_updates(state.params, updates)
+
+    new_state = state.replace(
+        params=params,
+        opt_state=opt_state,
+        step=state.step + 1,
+    )
+
+    return new_state, loss
+
+
+def val_step(
+    state: TrainState,
+    rng: jax.Array,
+    x: jnp.ndarray,
+    classes: jnp.ndarray,
+    timesteps: int,
+    d_params: dict[str, int],
+    sharding: dict[str, NamedSharding] | None = None,
+) -> jnp.float32:
+    rng, step_rng = jax.random.split(rng)
+    if sharding is not None:
+        x = jax.lax.with_sharding_constraint(x, sharding)
+        classes = jax.lax.with_sharding_constraint(classes, sharding)
+
+    def loss_fn(params):
+        return p_loss(
+            rng=step_rng,
+            state=state.replace(params=params),
+            x=x,
+            classes=classes,
+            timesteps=timesteps,
+            diffusion_params=d_params,
+        )
+
+    loss = loss_fn(state.params)
+
+    return loss
+
+
+def sample_step(
+    state: TrainState,
+    rng: jax.Array,
+    timesteps: int,
+    sample_bs: int,
+    sequence_length: int,
+    group_number: int,
+    number_of_samples: int,
+    d_params: dict[str, jax.Array],
+    cell_num_list: list,
+) -> jnp.ndarray:
+    samples = create_sample(
+        state=state,
+        rng=rng,
+        timesteps=timesteps,
+        diffusion_params=d_params,
+        cell_types=cell_num_list,
+        number_of_samples=number_of_samples,
+        sample_bs=sample_bs,
+        sequence_length=sequence_length,
+        group_number=group_number,
+        cond_weight_to_metric=1,
+    )
+    return samples
+
+
+def create_checkpoint_manager(
+    checkpoint_dir: str, item_names: tuple, save_interval_steps: int = 1, use_async: bool = True
+) -> CheckpointManager:
+    manager = CheckpointManager(
+        checkpoint_dir,
+        item_names=item_names,
+        options=CheckpointManagerOptions(
+            create=True,
+            # save_interval_steps=save_interval_steps,
+            enable_async_checkpointing=use_async,
+        ),
+    )
+    return manager
+
+
+def get_dataset(debug: bool = False) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int], dict]:
+    encode_data = load_data(
+        data_path="dnadiffusion/data/K562_hESCT0_HepG2_GM12878_12k_sequences_per_group.txt",
+        saved_data_path="dnadiffusion/data/encode_data.pkl",
+        subset_list=[
+            "GM12878_ENCLB441ZZZ",
+            "hESCT0_ENCLB449ZZZ",
+            "K562_ENCLB843GMH",
+            "HepG2_ENCLB029COU",
+        ],
+        limit_total_sequences=0,
+        num_sampling_to_compare_cells=1000,
+        load_saved_data=True,
+    )
+    if debug:
+        x_data = encode_data["X_train"][:1]
+        y_data = encode_data["x_train_cell_type"][:1]
+        x_val_data = encode_data["X_val"][:1]
+        y_val_data = encode_data["x_val_cell_type"][:1]
+
+    else:
+        x_data = encode_data["X_train"]
+        y_data = encode_data["x_train_cell_type"]
+        x_val_data = encode_data["X_val"]
+        y_val_data = encode_data["x_val_cell_type"]
+
+    cell_num_list = encode_data["cell_types"]
+    numeric_to_tag_dict = encode_data["numeric_to_tag"]
+
+    return x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag_dict
 
 
 if __name__ == "__main__":
