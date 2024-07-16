@@ -1,18 +1,19 @@
 import jax
+from flax.training.train_state import TrainState
 from jax import numpy as jnp
 
 
 def create_sample(
-    state,
-    rng,
-    timesteps,
-    diffusion_params,
-    cell_types,
-    number_of_samples,
-    sample_bs,
-    sequence_length,
-    group_number,
-    cond_weight_to_metric,
+    state: TrainState,
+    rng: jax.Array,
+    timesteps: int,
+    diffusion_params: dict,
+    cell_types: list,
+    number_of_samples: int,
+    sample_bs: int,
+    sequence_length: int ,
+    group_number: int,
+    cond_weight_to_metric: float,
 ):
     # timesteps = timesteps.shape[0]
     # number_of_samples = number_of_samples.shape[0]
