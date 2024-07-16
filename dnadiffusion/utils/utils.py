@@ -24,33 +24,6 @@ def l2_norm(x):
     return x / jnp.sqrt(jnp.sum(x**2, axis=2, keepdims=True) + 1e-8)
 
 
-def linear_beta_schedule(beta_start, beta_end, n_timesteps):
-    betas = jnp.linspace(beta_start, beta_end, n_timesteps, dtype=jnp.float32)
-    return betas
-
-
-def diffusion_params(timesteps, beta_start, beta_end):
-    betas = linear_beta_schedule(beta_start, beta_end, timesteps)
-    alphas = 1.0 - betas
-    alphas_cumprod = jnp.cumprod(alphas, axis=0)
-    alphas_cumprod_prev = jnp.pad(alphas_cumprod[:-1], ((1, 0),), constant_values=1.0)
-    sqrt_recip_alphas = jnp.sqrt(1.0 / alphas)
-    sqrt_alphas_cumprod = jnp.sqrt(alphas_cumprod)
-    sqrt_1m_alphas_cumprod = jnp.sqrt(1.0 - alphas_cumprod)
-    posterior_variance = betas * (1.0 - alphas_cumprod) / (1.0 - alphas)
-
-    return {
-        "betas": betas,
-        "alphas": alphas,
-        "alphas_cumprod": alphas_cumprod,
-        "alphas_cumprod_prev": alphas_cumprod_prev,
-        "sqrt_recip_alphas": sqrt_recip_alphas,
-        "sqrt_alphas_cumprod": sqrt_alphas_cumprod,
-        "sqrt_1m_alphas_cumprod": sqrt_1m_alphas_cumprod,
-        "posterior_variance": posterior_variance,
-    }
-
-
 def get_init_state(rng, x_shape, t_shape, classes_shape, model, tx):
     x_init = jnp.ones(x_shape, dtype=jnp.float32)
     t_init = jnp.ones(t_shape, dtype=jnp.int32)
