@@ -16,9 +16,9 @@ from dnadiffusion.data.dataloader import load_data
 from dnadiffusion.utils.sample_utils import create_sample
 
 
-def create_mesh(batch_size: int) -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array, int]:
-    jax.distributed.initialize()
-    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
+def create_mesh() -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array]:
+    # jax.distributed.initialize()
+    jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
 
     if jax.process_index() == 0:
         print("Number of devices: ", jax.device_count())
@@ -42,9 +42,7 @@ def create_mesh(batch_size: int) -> tuple[jax.sharding.Mesh, NamedSharding, Name
 
     rng = jax.random.PRNGKey(0)
 
-    batch_size = batch_size * jax.device_count()
-
-    return mesh, repl_sharding, data_sharding, data_spec, rng, batch_size
+    return mesh, repl_sharding, data_sharding, data_spec, rng
 
 
 def init_train_state(

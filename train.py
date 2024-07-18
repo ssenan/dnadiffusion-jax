@@ -11,7 +11,7 @@ from jax import numpy as jnp
 from jax.experimental import multihost_utils
 from jax.experimental.shard_map import shard_map
 from jax.sharding import PartitionSpec as P
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 from tqdm import tqdm
 
 from dnadiffusion.utils.train_utils import (
@@ -25,15 +25,18 @@ from dnadiffusion.utils.train_utils import (
 from dnadiffusion.utils.utils import convert_to_seq_jax
 
 
-# TODO: Make a model creation function to get the model, loss, tx, and other parameters like diffusion params
-
-
 def train(
+    mesh: jax.sharding.Mesh,
+    repl_sharding: jax.sharding.NamedSharding,
+    data_sharding: jax.sharding.NamedSharding,
+    data_spec: jax.sharding.PartitionSpec,
+    rng: jax.Array,
     model: nn.Module,
     tx: optax.GradientTransformation,
     loss_fn: Callable,
     dataset: tuple,
     batch_size: int,
+    num_epochs: int,
     sample_epoch: int,
     checkpoint_epoch: int,
     number_of_samples: int,
@@ -41,8 +44,6 @@ def train(
     path: str,
     d_params: dict | None = None,
 ) -> None:
-    mesh, repl_sharding, data_sharding, data_spec, rng, batch_size = create_mesh(batch_size)
-
     # Creating the model
     rng, init_rng = jax.random.split(rng)
 
@@ -113,9 +114,7 @@ def train(
     # path.mkdir(parents=True, exist_ok=True)
     checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch"))
 
-    num_epochs = 2200
     global_step = 0
-    # loss = 0.0
 
     for epoch in tqdm(range(num_epochs), disable=not jax.process_index() == 0, desc="Epochs"):
         rng, *rngs = jax.random.split(rng, 3)
@@ -201,16 +200,23 @@ def train(
 
 @hydra.main(config_path="configs", config_name="train", version_base="1.3")
 def main(cfg: DictConfig):
-    print(OmegaConf.to_yaml(cfg))
+    mesh, repl_sharding, data_sharding, data_spec, rng = create_mesh()
+
+    # Training
+    train_setup = {**cfg.training}
+    train_setup["batch_size"] = train_setup["batch_size"] * jax.device_count()
     unet = hydra.utils.instantiate(cfg.models)
     d_params = hydra.utils.instantiate(cfg.diffusion)
     data = hydra.utils.instantiate(cfg.data)
     tx = hydra.utils.instantiate(cfg.optimizer)
     loss_fn = hydra.utils.instantiate(cfg.loss_fn)
-    train_setup = {**cfg.training}
-    print(train_setup)
 
     train(
+        mesh=mesh,
+        repl_sharding=repl_sharding,
+        data_sharding=data_sharding,
+        data_spec=data_spec,
+        rng=rng,
         model=unet,
         tx=tx,
         loss_fn=loss_fn,

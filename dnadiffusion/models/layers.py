@@ -193,42 +193,44 @@ class Attention(nn.Module):
 
 
 def _query_chunk_attention(
-    query: jax.Array,
-    key: jax.Array,
-    value: jax.Array,
-    key_chunk_size: int = 2048,
-    precision: Any = lax.Precision.HIGHEST,
-    dtype: jnp.dtype = jnp.float32,
+    chunk_idx,
+    query,
+    key,
+    value,
+    key_chunk_size=2048,
+    precision=lax.Precision.HIGHEST,
+    dtype=jnp.float32,
 ):
-    num_kv, num_heads, k_features = key.shape
+    num_kv, num_heads, k_features = key.shape[-3:]
     v_features = value.shape[-1]
+    num_q = query.shape[-3]
     key_chunk_size = min(key_chunk_size, num_kv)
     query = query / jnp.sqrt(k_features).astype(dtype)
 
     @partial(jax.checkpoint, prevent_cse=False)
-    def summarize_chunk(query: jax.Array, key: jax.Array, value: jax.Array):
-        attn_weights = jnp.einsum("qhd,khd->qhk", query, key, precision=precision).astype(dtype)
+    def summarize_chunk(query, key, value):
+        attn_weights = jnp.einsum("...qhd,...khd->...qhk", query, key, precision=precision).astype(dtype)
         max_score = jnp.max(attn_weights, axis=-1, keepdims=True)
         max_score = jax.lax.stop_gradient(max_score)
         exp_weights = jnp.exp(attn_weights - max_score)
-        exp_values = jnp.einsum("vhf,qhv->qhf", value, exp_weights, precision=precision).astype(dtype)
-        return (
-            exp_values,
-            exp_weights.sum(axis=-1),
-            max_score.reshape((query.shape[0], num_heads)),
-        )
+        exp_values = jnp.einsum("...vhf,...qhv->...qhf", value, exp_weights, precision=precision).astype(dtype)
+        max_score = jnp.einsum("...qhk->...qh", max_score)
+        return exp_values, exp_weights.sum(axis=-1), max_score
 
-    def chunk_scanner(chunk_idx: int):
-        key_chunk = lax.dynamic_slice(key, (chunk_idx, 0, 0), slice_sizes=(key_chunk_size, num_heads, k_features))
+    def chunk_scanner(chunk_idx):
+        key_chunk = lax.dynamic_slice(
+            key,
+            tuple([0] * (key.ndim - 3)) + (chunk_idx, 0, 0),
+            slice_sizes=tuple(key.shape[:-3]) + (key_chunk_size, num_heads, k_features),
+        )
         value_chunk = lax.dynamic_slice(
             value,
-            (chunk_idx, 0, 0),
-            slice_sizes=(key_chunk_size, num_heads, v_features),
+            tuple([0] * (value.ndim - 3)) + (chunk_idx, 0, 0),
+            slice_sizes=tuple(value.shape[:-3]) + (key_chunk_size, num_heads, v_features),
         )
         return summarize_chunk(query, key_chunk, value_chunk)
 
-    chunk_values, chunk_weights, chunk_max = lax.map(chunk_scanner, xs=jnp.arange(0, num_kv, key_chunk_size))
-
+    chunk_values, chunk_weights, chunk_max = jax.lax.map(chunk_scanner, jnp.arange(0, num_kv, key_chunk_size))
     global_max = jnp.max(chunk_max, axis=0, keepdims=True)
     max_diffs = jnp.exp(chunk_max - global_max)
     chunk_values *= jnp.expand_dims(max_diffs, axis=-1)
@@ -258,7 +260,7 @@ def jax_efficient_attention(
         )
         return (
             chunk_idx + query_chunk_size,
-            _query_chunk_attention2(chunk_idx, query_chunk, key, value, precision=precision),
+            _query_chunk_attention(chunk_idx, query_chunk, key, value, precision=precision),
         )
 
     _, res = lax.scan(chunk_scanner, init=0, xs=None, length=math.ceil(num_q / query_chunk_size))
