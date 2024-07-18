@@ -17,8 +17,8 @@ from dnadiffusion.utils.sample_utils import create_sample
 
 
 def create_mesh() -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array]:
-    # jax.distributed.initialize()
-    jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
+    jax.distributed.initialize()
+    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
 
     if jax.process_index() == 0:
         print("Number of devices: ", jax.device_count())
