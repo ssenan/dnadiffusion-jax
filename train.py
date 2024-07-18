@@ -209,7 +209,7 @@ def main(cfg: DictConfig):
     d_params = hydra.utils.instantiate(cfg.diffusion)
     data = hydra.utils.instantiate(cfg.data)
     tx = hydra.utils.instantiate(cfg.optimizer)
-    loss_fn = hydra.utils.instantiate(cfg.loss_fn)
+    loss_fn = hydra.utils.get_method(cfg.loss_fn)
 
     train(
         mesh=mesh,
