@@ -21,13 +21,12 @@ def p_loss(
     state: TrainState,
     x: jax.Array,
     classes: jax.Array,
-    timesteps: jax.Array,
     diffusion_params: dict,
     p_uncond: float = 0.1,
 ):
     b, h, w, c = x.shape
     rng, t_rng = jax.random.split(rng)
-    batch_t = jax.random.randint(t_rng, shape=(b,), minval=0, maxval=timesteps, dtype=jnp.int32)
+    batch_t = jax.random.randint(t_rng, shape=(b,), minval=0, maxval=diffusion_params["timesteps"], dtype=jnp.int32)
 
     # Creating noisy sample
     rng, noise_rng = jax.random.split(rng)
@@ -62,6 +61,7 @@ def diffusion_params(timesteps: int, beta_start: float, beta_end: float):
     posterior_variance = betas * (1.0 - alphas_cumprod) / (1.0 - alphas)
 
     return {
+        "timesteps": timesteps,
         "betas": betas,
         "alphas": alphas,
         "alphas_cumprod": alphas_cumprod,
