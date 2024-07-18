@@ -1,0 +1,3 @@
+_target_: dnadiffusion.models.unet.UNet
+dim: 200
+resnet_block_groups: 4

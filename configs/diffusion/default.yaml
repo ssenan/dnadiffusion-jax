@@ -1,0 +1,4 @@
+_target_: dnadiffusion.models.diffusion.diffusion_params
+timesteps: 50
+beta_start: 0.0001
+beta_end: 0.2

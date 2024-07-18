@@ -1,53 +1,58 @@
-from typing import Any
+from typing import Callable
 
 import flax.linen as nn
+import hydra
 import jax
 import numpy as np
 import optax
 import orbax.checkpoint as ocp
 import wandb
-from flax.training.train_state import TrainState
 from jax import numpy as jnp
-from jax.experimental import mesh_utils, multihost_utils
+from jax.experimental import multihost_utils
 from jax.experimental.shard_map import shard_map
-from jax.sharding import NamedSharding, PartitionSpec as P
-from orbax.checkpoint.checkpoint_manager import (
-    CheckpointManager,
-    CheckpointManagerOptions,
-)
+from jax.sharding import PartitionSpec as P
+from omegaconf import DictConfig, OmegaConf
 from tqdm import tqdm
 
-from dnadiffusion.data.dataloader import load_data
-from dnadiffusion.models.diffusion import p_loss
-from dnadiffusion.models.unet import UNet
-from dnadiffusion.utils.sample_util import create_sample
-from dnadiffusion.utils.utils import convert_to_seq_jax, diffusion_params
+from dnadiffusion.utils.train_utils import (
+    create_checkpoint_manager,
+    create_mesh,
+    init_train_state,
+    sample_step,
+    train_step,
+    val_step,
+)
+from dnadiffusion.utils.utils import convert_to_seq_jax
+
+
+# TODO: Make a model creation function to get the model, loss, tx, and other parameters like diffusion params
 
 
 def train(
+    model: nn.Module,
+    tx: optax.GradientTransformation,
+    loss_fn: Callable,
+    dataset: tuple,
     batch_size: int,
     sample_epoch: int,
     checkpoint_epoch: int,
     number_of_samples: int,
     use_wandb: bool,
+    path: str,
+    d_params: dict | None = None,
 ) -> None:
-    mesh, repl_sharding, data_sharding, data_spec, rng, batch_size = create_mesh_and_model(batch_size)
+    mesh, repl_sharding, data_sharding, data_spec, rng, batch_size = create_mesh(batch_size)
 
     # Creating the model
     rng, init_rng = jax.random.split(rng)
-    unet = UNet(dim=200, resnet_block_groups=4)
-    tx = optax.adam(1e-4)
 
-    state, shardings = init_train_state(unet, init_rng, mesh, tx)
-
-    timesteps = 50
-    d_params = diffusion_params(timesteps=50, beta_start=0.0001, beta_end=0.2)
+    state, shardings = init_train_state(model, init_rng, mesh, tx)
 
     train_step_fn = jax.jit(
         shard_map(
             train_step,
             mesh=mesh,
-            in_specs=(P(), P(), P("data"), P("data"), P(), P()),
+            in_specs=(P(), P(), P(), P("data"), P("data"), P(), P()),
             out_specs=(P(), P()),
             check_rep=False,
         )
@@ -57,7 +62,7 @@ def train(
         shard_map(
             val_step,
             mesh=mesh,
-            in_specs=(P(), P(), P("data"), P("data"), P(), P()),
+            in_specs=(P(), P(), P(), P("data"), P("data"), P(), P()),
             out_specs=P(),
             check_rep=False,
         )
@@ -96,7 +101,7 @@ def train(
         return x, y
 
     # Training
-    x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag = get_dataset()
+    x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag = dataset
     train_dataset_size = len(x_data)
     train_steps_per_epoch = np.ceil(train_dataset_size / batch_size).astype(int)
     val_dataset_size = len(x_val_data)
@@ -106,7 +111,6 @@ def train(
     # path = Path("checkpoints")
     # path = path.absolute()
     # path.mkdir(parents=True, exist_ok=True)
-    path = "gs://dnadiffusion-bucket/checkpoints/"
     checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch"))
 
     num_epochs = 2200
@@ -121,7 +125,7 @@ def train(
             x = batch_sharding(x)
             y = batch_sharding(y)
             # x, y = next(train_loader)
-            state, loss = train_step_fn(state, rngs[1], x, y, timesteps, d_params)
+            state, loss = train_step_fn(state, loss_fn, rngs[1], x, y, d_params)
             global_step += 1
 
             if jax.process_index() == 0 and use_wandb:
@@ -140,7 +144,7 @@ def train(
             x_val = batch_sharding(x_val)
             y_val = batch_sharding(y_val)
             # x_val, y_val = next(val_loader)
-            val_loss = val_step_fn(state, rngs[1], x_val, y_val, timesteps, d_params)
+            val_loss = val_step_fn(state, loss_fn, rngs[1], x_val, y_val, d_params)
 
         print(f"Epoch: {epoch}, Step: {global_step}, val_loss:{val_loss:.4f}, loss: {loss:.4f}")
 
@@ -160,9 +164,8 @@ def train(
 
             for i in cell_num_list:
                 samples = sample_fn(
-                    state_dp,
+                    state,
                     sample_rng,
-                    timesteps,
                     1,
                     200,
                     i,
@@ -196,213 +199,26 @@ def train(
         print("Finished training")
 
 
-def create_mesh_and_model(batch_size: int) -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array, int]:
-    jax.distributed.initialize()
-    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
+@hydra.main(config_path="configs", config_name="train", version_base="1.3")
+def main(cfg: DictConfig):
+    print(OmegaConf.to_yaml(cfg))
+    unet = hydra.utils.instantiate(cfg.models)
+    d_params = hydra.utils.instantiate(cfg.diffusion)
+    data = hydra.utils.instantiate(cfg.data)
+    tx = hydra.utils.instantiate(cfg.optimizer)
+    loss_fn = hydra.utils.instantiate(cfg.loss_fn)
+    train_setup = {**cfg.training}
+    print(train_setup)
 
-    if jax.process_index() == 0:
-        print("Number of devices: ", jax.device_count())
-        print("Local devices: ", jax.local_device_count())
-
-    mesh = jax.sharding.Mesh(mesh_utils.create_device_mesh((jax.device_count(),)), ("data",))
-    repl_sharding = NamedSharding(
-        mesh,
-        P(),
+    train(
+        model=unet,
+        tx=tx,
+        loss_fn=loss_fn,
+        dataset=data,
+        **train_setup,
+        d_params=d_params,
     )
-
-    data_sharding = NamedSharding(
-        mesh,
-        P(
-            "data",
-        ),
-    )
-    data_spec = P(
-        "data",
-    )
-
-    rng = jax.random.PRNGKey(0)
-
-    batch_size = batch_size * jax.device_count()
-
-    return mesh, repl_sharding, data_sharding, data_spec, rng, batch_size
-
-
-def init_train_state(
-    model: nn.Module, rng: jax.Array, mesh: jax.sharding.Mesh, tx: optax.GradientTransformation
-) -> tuple[TrainState, Any]:
-    x = jax.ShapeDtypeStruct((16, 4, 200, 1), jnp.float32)
-    t = jax.ShapeDtypeStruct((16,), jnp.int32)
-    classes = jax.ShapeDtypeStruct((16,), jnp.int32)
-
-    def init(rng, x, t, classes):
-        params = model.init(rng, x, t, classes)
-        return TrainState.create(apply_fn=model.apply, params=params["params"], tx=tx)
-
-    params = jax.eval_shape(init, rng, x, t, classes)
-    shardings = nn.get_sharding(params, mesh)
-    state = jax.jit(init, out_shardings=shardings)(rng, x, t, classes)
-    return state, shardings
-
-
-def train_step(
-    state: TrainState,
-    rng: jax.Array,
-    x: jax.Array,
-    classes: jax.Array,
-    timesteps: int,
-    d_params: dict[
-        str,
-        int,
-    ],
-    sharding: dict[str, NamedSharding] | None = None,
-) -> tuple[TrainState, jnp.float32]:
-    rng, step_rng = jax.random.split(rng)
-    if sharding is not None:
-        x = jax.lax.with_sharding_constraint(x, sharding)
-        classes = jax.lax.with_sharding_constraint(classes, sharding)
-
-    def loss_fn(params):
-        return p_loss(
-            rng=step_rng,
-            state=state.replace(params=params),
-            x=x,
-            classes=classes,
-            timesteps=timesteps,
-            diffusion_params=d_params,
-        )
-
-    grad_fn = jax.value_and_grad(loss_fn)
-    loss, grads = grad_fn(state.params)
-
-    # Optimizer update
-    updates, opt_state = state.tx.update(grads, state.opt_state, state.params)
-
-    # Model update
-    params = optax.apply_updates(state.params, updates)
-
-    new_state = state.replace(
-        params=params,
-        opt_state=opt_state,
-        step=state.step + 1,
-    )
-
-    return new_state, loss
-
-
-def val_step(
-    state: TrainState,
-    rng: jax.Array,
-    x: jnp.ndarray,
-    classes: jnp.ndarray,
-    timesteps: int,
-    d_params: dict[str, int],
-    sharding: dict[str, NamedSharding] | None = None,
-) -> jnp.float32:
-    rng, step_rng = jax.random.split(rng)
-    if sharding is not None:
-        x = jax.lax.with_sharding_constraint(x, sharding)
-        classes = jax.lax.with_sharding_constraint(classes, sharding)
-
-    def loss_fn(params):
-        return p_loss(
-            rng=step_rng,
-            state=state.replace(params=params),
-            x=x,
-            classes=classes,
-            timesteps=timesteps,
-            diffusion_params=d_params,
-        )
-
-    loss = loss_fn(state.params)
-
-    return loss
-
-
-def sample_step(
-    state: TrainState,
-    rng: jax.Array,
-    timesteps: int,
-    sample_bs: int,
-    sequence_length: int,
-    group_number: int,
-    number_of_samples: int,
-    d_params: dict[str, jax.Array],
-    cell_num_list: list,
-) -> jnp.ndarray:
-    samples = create_sample(
-        state=state,
-        rng=rng,
-        timesteps=timesteps,
-        diffusion_params=d_params,
-        cell_types=cell_num_list,
-        number_of_samples=number_of_samples,
-        sample_bs=sample_bs,
-        sequence_length=sequence_length,
-        group_number=group_number,
-        cond_weight_to_metric=1,
-    )
-    return samples
-
-
-def create_checkpoint_manager(
-    checkpoint_dir: str, item_names: tuple, save_interval_steps: int = 1, use_async: bool = True
-) -> CheckpointManager:
-    manager = CheckpointManager(
-        checkpoint_dir,
-        item_names=item_names,
-        options=CheckpointManagerOptions(
-            create=True,
-            # save_interval_steps=save_interval_steps,
-            enable_async_checkpointing=use_async,
-        ),
-    )
-    return manager
-
-
-def get_dataset(debug: bool = False) -> tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray, list[int], dict]:
-    encode_data = load_data(
-        data_path="dnadiffusion/data/K562_hESCT0_HepG2_GM12878_12k_sequences_per_group.txt",
-        saved_data_path="dnadiffusion/data/encode_data.pkl",
-        subset_list=[
-            "GM12878_ENCLB441ZZZ",
-            "hESCT0_ENCLB449ZZZ",
-            "K562_ENCLB843GMH",
-            "HepG2_ENCLB029COU",
-        ],
-        limit_total_sequences=0,
-        num_sampling_to_compare_cells=1000,
-        load_saved_data=True,
-    )
-    if debug:
-        x_data = encode_data["X_train"][:1]
-        y_data = encode_data["x_train_cell_type"][:1]
-        x_val_data = encode_data["X_val"][:1]
-        y_val_data = encode_data["x_val_cell_type"][:1]
-
-    else:
-        x_data = encode_data["X_train"]
-        y_data = encode_data["x_train_cell_type"]
-        x_val_data = encode_data["X_val"]
-        y_val_data = encode_data["x_val_cell_type"]
-
-    cell_num_list = encode_data["cell_types"]
-    numeric_to_tag_dict = encode_data["numeric_to_tag"]
-
-    return x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag_dict
 
 
 if __name__ == "__main__":
-    # train(
-    #     batch_size=1,
-    #     sample_epoch=200,
-    #     checkpoint_epoch=1,
-    #     number_of_samples=1,
-    #     use_wandb=False,
-    # )
-    train(
-        batch_size=120,
-        sample_epoch=5000,
-        checkpoint_epoch=10,
-        number_of_samples=1000,
-        use_wandb=True,
-    )
+    main()
