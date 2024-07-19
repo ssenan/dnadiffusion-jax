@@ -187,12 +187,13 @@ def train(
                             f.write("\n".join(sequences))
                     else:
                         write_gcs("dnadiffusion-bucket", f"{numeric_to_tag[i]}.txt", sequences)
+                multihost_utils.sync_global_devices("sample_done")
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # multihost_utils.sync_global_devices("checkpointing")
             # Save checkpoint
             checkpoint_manager.save(
-                global_step,
+                state.step,
                 args=ocp.args.Composite(
                     state=ocp.args.PyTreeSave(state),
                     epoch=ocp.args.JsonSave(epoch),
