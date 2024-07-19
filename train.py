@@ -13,6 +13,7 @@ from jax.experimental import multihost_utils
 from omegaconf import DictConfig
 from tqdm import tqdm
 
+from dnadiffusion.utils.sample_utils import write_gcs
 from dnadiffusion.utils.train_utils import (
     create_checkpoint_manager,
     create_mesh,
@@ -181,8 +182,11 @@ def train(
                 if jax.process_index() == 0:
                     sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
                     sequences = jax.device_get(sequences)
-                    with open(f"{path}/{numeric_to_tag[i]}.txt", "w") as f:
-                        f.write("\n".join(sequences))
+                    if "gs" not in path:
+                        with open(f"{path}/{numeric_to_tag[i]}.txt", "w") as f:
+                            f.write("\n".join(sequences))
+                    else:
+                        write_gcs("dnadiffusion-bucket", f"{path}/{numeric_to_tag[i]}.txt", sequences)
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # multihost_utils.sync_global_devices("checkpointing")

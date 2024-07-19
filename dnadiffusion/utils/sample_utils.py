@@ -1,5 +1,6 @@
 import jax
 from flax.training.train_state import TrainState
+from google.cloud import storage
 from jax import numpy as jnp
 
 
@@ -127,3 +128,12 @@ def sample_loop_fn(state, rng, classes, shape, cond_weight, diffusion_params):
     )
 
     return final_img
+
+
+def write_gcs(bucket_name: str, file_name: str, sequences: jax.Array) -> None:
+    storage_client = storage.Client()
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(file_name)
+
+    with blob.open("w") as f:
+        f.write("\n".join(sequences))
