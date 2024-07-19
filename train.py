@@ -181,14 +181,14 @@ def train(
                 if jax.process_index() == 0:
                     sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]
                     sequences = jax.device_get(sequences)
-                    with open(f"./{numeric_to_tag[i]}.txt", "w") as f:
+                    with open(f"{path}/{numeric_to_tag[i]}.txt", "w") as f:
                         f.write("\n".join(sequences))
 
         if (epoch + 1) % checkpoint_epoch == 0:
-            multihost_utils.sync_global_devices("checkpointing")
+            # multihost_utils.sync_global_devices("checkpointing")
             # Save checkpoint
             checkpoint_manager.save(
-                state.step,
+                global_step,
                 args=ocp.args.Composite(
                     state=ocp.args.PyTreeSave(state),
                     epoch=ocp.args.JsonSave(epoch),
