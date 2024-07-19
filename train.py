@@ -193,11 +193,13 @@ def train(
                     state=ocp.args.PyTreeSave(state),
                     epoch=ocp.args.JsonSave(epoch),
                 ),
+                force=True,
             )
-            checkpoint_manager.wait_until_finished()
+            # checkpoint_manager.wait_until_finished()
 
     if jax.process_index() == 0 and use_wandb:
         wandb.finish()
+        checkpoint_manager.wait_until_finished()
         print("Finished training")
 
 
