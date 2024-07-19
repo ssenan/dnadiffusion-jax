@@ -186,7 +186,7 @@ def train(
                         with open(f"{path}/{numeric_to_tag[i]}.txt", "w") as f:
                             f.write("\n".join(sequences))
                     else:
-                        write_gcs("dnadiffusion-bucket", f"{path}/{numeric_to_tag[i]}.txt", sequences)
+                        write_gcs("dnadiffusion-bucket", f"{numeric_to_tag[i]}.txt", sequences)
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # multihost_utils.sync_global_devices("checkpointing")
