@@ -1,4 +1,6 @@
 batch_size: 120
+sample_batch_size: 10
+sequence_length: 200
 num_epochs: 2200
 sample_epoch: 500
 checkpoint_epoch: 500

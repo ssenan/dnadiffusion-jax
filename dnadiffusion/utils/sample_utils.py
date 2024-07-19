@@ -6,21 +6,14 @@ from jax import numpy as jnp
 def create_sample(
     state: TrainState,
     rng: jax.Array,
-    timesteps: int,
-    diffusion_params: dict,
     cell_types: list,
     number_of_samples: int,
     sample_bs: int,
-    sequence_length: int ,
+    sequence_length: int,
     group_number: int,
     cond_weight_to_metric: float,
+    diffusion_params: dict | None = None,
 ):
-    # timesteps = timesteps.shape[0]
-    # number_of_samples = number_of_samples.shape[0]
-    # sample_bs = sample_bs.shape[0]
-    # sequence_length = sequence_length.shape[0]
-    # group_number = group_number.shape[0]
-
     @jax.jit
     def sample_batch(rng):
         if group_number is not None:
@@ -38,7 +31,6 @@ def create_sample(
             classes,
             (sample_bs, 4, 200, 1),
             cond_weight_to_metric,
-            timesteps,
             diffusion_params,
         )
         sequences = jnp.argmax(sampled_images.reshape(sample_bs, 4, 200), axis=1)
@@ -64,7 +56,7 @@ def create_sample(
     return final_sequences
 
 
-def sample_loop_fn(state, rng, classes, shape, cond_weight, timesteps, diffusion_params):
+def sample_loop_fn(state, rng, classes, shape, cond_weight, diffusion_params):
     def sample_step_fn(x, t, t_index, sample_rng):
         batch_size = x.shape[0]
         sample_rng, noise_rng = jax.random.split(sample_rng)
@@ -106,6 +98,7 @@ def sample_loop_fn(state, rng, classes, shape, cond_weight, timesteps, diffusion
 
     batch_size = shape[0]
     rng, noise_rng = jax.random.split(rng)
+    timesteps = diffusion_params["timesteps"]
 
     # Start from pure noise
     img = jax.random.normal(noise_rng, shape)
@@ -126,6 +119,11 @@ def sample_loop_fn(state, rng, classes, shape, cond_weight, timesteps, diffusion
         return new_img, new_sample_rng
 
     # Sampling
-    final_img, _ = jax.lax.fori_loop(0, timesteps, lambda i, carry: body_fn(timesteps - 1 - i, carry), (img, rng))
+    final_img, _ = jax.lax.fori_loop(
+        0,
+        timesteps,
+        lambda i, carry: body_fn(timesteps - 1 - i, carry),
+        (img, rng),
+    )
 
     return final_img

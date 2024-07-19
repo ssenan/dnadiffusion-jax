@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Callable
 
 import flax.linen as nn
 import jax
@@ -13,12 +13,13 @@ from orbax.checkpoint.checkpoint_manager import (
 )
 
 from dnadiffusion.data.dataloader import load_data
+from dnadiffusion.models.diffusion import p_loss
 from dnadiffusion.utils.sample_utils import create_sample
 
 
 def create_mesh() -> tuple[jax.sharding.Mesh, NamedSharding, NamedSharding, P, jax.Array]:
-    jax.distributed.initialize()
-    # jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
+    # jax.distributed.initialize()
+    jax.distributed.initialize(coordinator_address="localhost:8000", num_processes=1, process_id=0)
 
     if jax.process_index() == 0:
         print("Number of devices: ", jax.device_count())
@@ -62,9 +63,16 @@ def init_train_state(
     return state, shardings
 
 
+def get_loss_fn(loss_type: str) -> Callable:
+    if loss_type == "diffusion":
+        return p_loss
+    else:
+        raise ValueError(f"Loss type {loss_type} not supported.")
+
+
 def train_step(
     state: TrainState,
-    loss_fn: Any,
+    loss_fn: Callable,
     rng: jax.Array,
     x: jax.Array,
     classes: jax.Array,
@@ -108,7 +116,7 @@ def train_step(
 
 def val_step(
     state: TrainState,
-    loss_fn: Any,
+    loss_fn: Callable,
     rng: jax.Array,
     x: jnp.ndarray,
     classes: jnp.ndarray,
@@ -137,25 +145,23 @@ def val_step(
 def sample_step(
     state: TrainState,
     rng: jax.Array,
-    timesteps: int,
     sample_bs: int,
     sequence_length: int,
     group_number: int,
     number_of_samples: int,
-    d_params: dict[str, jax.Array],
     cell_num_list: list,
+    d_params: dict[str, jax.Array] | None = None,
 ) -> jnp.ndarray:
     samples = create_sample(
         state=state,
         rng=rng,
-        timesteps=timesteps,
-        diffusion_params=d_params,
         cell_types=cell_num_list,
         number_of_samples=number_of_samples,
         sample_bs=sample_bs,
         sequence_length=sequence_length,
         group_number=group_number,
         cond_weight_to_metric=1,
+        diffusion_params=d_params,
     )
     return samples
 

@@ -1,1 +1,2 @@
 _target_: dnadiffusion.models.diffusion.p_loss
+_partial_: True

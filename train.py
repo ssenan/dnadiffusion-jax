@@ -1,3 +1,4 @@
+import functools
 from typing import Callable
 
 import flax.linen as nn
@@ -9,8 +10,6 @@ import orbax.checkpoint as ocp
 import wandb
 from jax import numpy as jnp
 from jax.experimental import multihost_utils
-from jax.experimental.shard_map import shard_map
-from jax.sharding import PartitionSpec as P
 from omegaconf import DictConfig
 from tqdm import tqdm
 
@@ -36,6 +35,8 @@ def train(
     loss_fn: Callable,
     dataset: tuple,
     batch_size: int,
+    sample_batch_size: int,
+    sequence_length: int,
     num_epochs: int,
     sample_epoch: int,
     checkpoint_epoch: int,
@@ -44,44 +45,45 @@ def train(
     path: str,
     d_params: dict | None = None,
 ) -> None:
-    # Creating the model
     rng, init_rng = jax.random.split(rng)
-
     state, shardings = init_train_state(model, init_rng, mesh, tx)
 
     train_step_fn = jax.jit(
-        shard_map(
-            train_step,
-            mesh=mesh,
-            in_specs=(P(), P(), P(), P("data"), P("data"), P(), P()),
-            out_specs=(P(), P()),
-            check_rep=False,
-        )
+        functools.partial(train_step),
+        in_shardings=(
+            shardings,
+            repl_sharding,
+            data_sharding,
+            data_sharding,
+            repl_sharding,
+        ),
+        out_shardings=(shardings, repl_sharding),
+        static_argnames=("loss_fn"),
     )
-
     val_step_fn = jax.jit(
-        shard_map(
-            val_step,
-            mesh=mesh,
-            in_specs=(P(), P(), P(), P("data"), P("data"), P(), P()),
-            out_specs=P(),
-            check_rep=False,
-        )
+        functools.partial(val_step),
+        in_shardings=(
+            shardings,
+            repl_sharding,
+            data_sharding,
+            data_sharding,
+            repl_sharding,
+        ),
+        out_shardings=repl_sharding,
+        static_argnames=("loss_fn"),
     )
 
-    with mesh:
-        sample_fn = jax.jit(
-            sample_step,
-            in_shardings=(
-                None,
-                repl_sharding,
-                repl_sharding,
-                repl_sharding,
-                repl_sharding,
-            ),
-            out_shardings=repl_sharding,
-            static_argnums=(3, 4, 5, 6),
-        )
+    sample_fn = jax.jit(
+        functools.partial(sample_step),
+        in_shardings=(
+            shardings,
+            repl_sharding,
+            repl_sharding,
+            repl_sharding,
+        ),
+        out_shardings=repl_sharding,
+        static_argnums=(2, 3, 4, 5),
+    )
 
     if jax.process_index() == 0 and use_wandb:
         id = wandb.util.generate_id()
@@ -165,15 +167,15 @@ def train(
                 samples = sample_fn(
                     state,
                     sample_rng,
-                    1,
-                    200,
+                    sample_batch_size,
+                    sequence_length,
                     i,
                     number_of_samples,
-                    d_params,
                     cell_num_list,
+                    d_params,
                 )
-                print(samples.shape)
 
+                multihost_utils.sync_global_devices("allgather")
                 collected_samples = multihost_utils.process_allgather(samples, tiled=True)
                 print(collected_samples.shape)
                 if jax.process_index() == 0:
@@ -209,7 +211,7 @@ def main(cfg: DictConfig):
     d_params = hydra.utils.instantiate(cfg.diffusion)
     data = hydra.utils.instantiate(cfg.data)
     tx = hydra.utils.instantiate(cfg.optimizer)
-    loss_fn = hydra.utils.get_method(cfg.loss_fn)
+    loss_fn = hydra.utils.instantiate(cfg.loss_fn)
 
     train(
         mesh=mesh,
