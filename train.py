@@ -185,6 +185,7 @@ def train(
                         f.write("\n".join(sequences))
 
         if (epoch + 1) % checkpoint_epoch == 0:
+            multihost_utils.sync_global_devices("checkpointing")
             # Save checkpoint
             checkpoint_manager.save(
                 state.step,
