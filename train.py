@@ -114,7 +114,7 @@ def train(
     # path = Path("checkpoints")
     # path = path.absolute()
     # path.mkdir(parents=True, exist_ok=True)
-    checkpoint_manager = create_checkpoint_manager(path, ("state", "epoch"))
+    checkpoint_manager = create_checkpoint_manager(f"{path}/checkpoints", ("state", "epoch"))
 
     global_step = 0
 
@@ -176,7 +176,7 @@ def train(
                 )
 
                 multihost_utils.sync_global_devices("allgather")
-                collected_samples = multihost_utils.process_allgather(samples, tiled=True)
+                collected_samples = multihost_utils.process_allgather(samples)
                 print(collected_samples.shape)
                 if jax.process_index() == 0:
                     sequences = [convert_to_seq_jax(x, ["A", "C", "G", "T"]) for x in collected_samples]

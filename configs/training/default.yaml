@@ -6,4 +6,4 @@ sample_epoch: 500
 checkpoint_epoch: 500
 number_of_samples: 1000
 use_wandb: True
-path : "gs://dnadiffusion-bucket/"
+path : "gs://dnadiffusion-bucket"
