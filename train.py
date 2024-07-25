@@ -159,6 +159,10 @@ def train(
                 }
             )
 
+        if (epoch + 1) % checkpoint_epoch == 0:
+            # Save checkpoint
+            save_state(state, f"/home/simonsenan/state_{epoch}.pkl")
+
         if (epoch + 1) % sample_epoch == 0:
             # Sampling
             rng, sample_rng = jax.random.split(rng)
@@ -187,10 +191,6 @@ def train(
                     else:
                         write_gcs("dnadiffusion-bucket", f"{numeric_to_tag[i]}.txt", sequences)
                 multihost_utils.sync_global_devices("sample_done")
-
-        if (epoch + 1) % checkpoint_epoch == 0:
-            # Save checkpoint
-            save_state(state, f"/home/simonsenan/state_{epoch}.pkl")
 
             # Save checkpoint
             # checkpoint_manager.save(
