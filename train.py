@@ -6,7 +6,6 @@ import hydra
 import jax
 import numpy as np
 import optax
-import orbax.checkpoint as ocp
 import wandb
 from jax import numpy as jnp
 from jax.experimental import multihost_utils
@@ -15,10 +14,10 @@ from tqdm import tqdm
 
 from dnadiffusion.utils.sample_utils import write_gcs
 from dnadiffusion.utils.train_utils import (
-    create_checkpoint_manager,
     create_mesh,
     init_train_state,
     sample_step,
+    save_state,
     train_step,
     val_step,
 )
@@ -115,7 +114,7 @@ def train(
     # path = Path("checkpoints")
     # path = path.absolute()
     # path.mkdir(parents=True, exist_ok=True)
-    checkpoint_manager = create_checkpoint_manager(f"{path}/checkpoints", ("state", "epoch"))
+    # checkpoint_manager = create_checkpoint_manager(f"{path}/checkpoints/", ("state", "epoch"), use_async=False)
 
     global_step = 0
 
@@ -190,26 +189,28 @@ def train(
                 multihost_utils.sync_global_devices("sample_done")
 
         if (epoch + 1) % checkpoint_epoch == 0:
-            # multihost_utils.sync_global_devices("checkpointing")
             # Save checkpoint
-            checkpoint_manager.save(
-                state.step,
-                args=ocp.args.Composite(
-                    state=ocp.args.PyTreeSave(state),
-                    epoch=ocp.args.JsonSave(epoch),
-                ),
-                force=True,
-            )
+            save_state(state, f"/home/simonsenan/state_{epoch}.pkl")
+
+            # Save checkpoint
+            # checkpoint_manager.save(
+            #     global_step,
+            #     args=ocp.args.Composite(
+            #         state=ocp.args.StandardSave(state),
+            #         epoch=ocp.args.JsonSave(epoch),
+            #     ),
+            #     force=True,
+            # )
             # checkpoint_manager.wait_until_finished()
 
     if jax.process_index() == 0 and use_wandb:
         wandb.finish()
-        checkpoint_manager.wait_until_finished()
+        # checkpoint_manager.wait_until_finished()
         print("Finished training")
 
 
 @hydra.main(config_path="configs", config_name="train", version_base="1.3")
-def main(cfg: DictConfig):
+def main(cfg: DictConfig) -> None:
     mesh, repl_sharding, data_sharding, data_spec, rng = create_mesh()
 
     # Training

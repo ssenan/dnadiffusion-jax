@@ -1,11 +1,14 @@
+import pickle
 from typing import Any, Callable
 
+import flax
 import flax.linen as nn
 import jax
 import optax
 from flax.training.train_state import TrainState
+from google.cloud import storage
 from jax import numpy as jnp
-from jax.experimental import mesh_utils
+from jax.experimental import mesh_utils, multihost_utils
 from jax.sharding import NamedSharding, PartitionSpec as P
 from orbax.checkpoint.checkpoint_manager import (
     CheckpointManager,
@@ -173,8 +176,6 @@ def create_checkpoint_manager(
         checkpoint_dir,
         item_names=item_names,
         options=CheckpointManagerOptions(
-            create=True,
-            # save_interval_steps=save_interval_steps,
             enable_async_checkpointing=use_async,
         ),
     )
@@ -214,3 +215,25 @@ def get_dataset(
     numeric_to_tag_dict = encode_data["numeric_to_tag"]
 
     return x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag_dict
+
+
+def save_state(state: TrainState, path: str) -> None:
+    tree = flax.serialization.to_state_dict(state)
+    flattened_tree = flax.traverse_util.flatten_dict(tree, keep_empty_nodes=True)
+
+    # Gather state from all devices
+    state = multihost_utils.process_allgather(flattened_tree)
+
+    # Save state to GCS
+    storage_client = storage.Client()
+    bucket_name = "dnadiffusion-bucket"
+    bucket = storage_client.bucket(bucket_name)
+
+    if jax.process_index() == 0:
+        with open(path, "wb") as f:
+            pickle.dump(state, f)
+
+        blob_name = "checkpoints/ckpt_test.pkl"
+        blob = bucket.blob(blob_name)
+        blob.upload_from_filename(path)
+        print(f"Saved checkpoint to {blob_name}")

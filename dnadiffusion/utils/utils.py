@@ -50,13 +50,6 @@ def get_abstract_state(x_shape, t_shape, classes_shape, model, tx, rng):
     return state_shape, state_spec
 
 
-def create_initial_state(x_shape, t_shape, classes_shape, model, tx, checkpoint_manager, rng, mesh):
-    init_state_fn = partial(get_init_state, x_shape, t_shape, classes_shape, model, tx)
-
-    state = jax.jit(init_state_fn)(rng)
-    pass
-
-
 def batch_sharding(batch, data_sharding):
     def per_device_init_fn(index):
         return batch[index]
