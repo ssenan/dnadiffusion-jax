@@ -137,4 +137,4 @@ def write_gcs(bucket_name: str, file_name: str, sequences: jax.Array) -> None:
 
     with blob.open("w") as f:
         f.write("\n".join(sequences))
-    blob.upload_from_filename(file_name)
+    # blob.upload_from_filename(file_name)
