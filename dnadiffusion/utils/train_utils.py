@@ -217,7 +217,7 @@ def get_dataset(
     return x_data, y_data, x_val_data, y_val_data, cell_num_list, numeric_to_tag_dict
 
 
-def save_state(state: TrainState, path: str) -> None:
+def save_state(state: TrainState, path: str, epoch: int) -> None:
     tree = flax.serialization.to_state_dict(state)
     flattened_tree = flax.traverse_util.flatten_dict(tree, keep_empty_nodes=True)
 
@@ -233,7 +233,7 @@ def save_state(state: TrainState, path: str) -> None:
         with open(path, "wb") as f:
             pickle.dump(state, f)
 
-        blob_name = "checkpoints/ckpt_test.pkl"
+        blob_name = f"checkpoints/state_{epoch}.pkl"
         blob = bucket.blob(blob_name)
         blob.upload_from_filename(path)
         print(f"Saved checkpoint to {blob_name}")

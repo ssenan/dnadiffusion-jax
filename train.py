@@ -161,7 +161,9 @@ def train(
 
         if (epoch + 1) % checkpoint_epoch == 0:
             # Save checkpoint
-            save_state(state, f"/home/simonsenan/state_{epoch}.pkl")
+            multihost_utils.sync_global_devices("checkpoint_start")
+            save_state(state, f"/home/simonsenan/state_{epoch}.pkl", epoch)
+            multihost_utils.sync_global_devices("checkpoint_done")
 
         if (epoch + 1) % sample_epoch == 0:
             # Sampling
