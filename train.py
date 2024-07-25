@@ -147,7 +147,7 @@ def train(
             # x_val, y_val = next(val_loader)
             val_loss = val_step_fn(state, loss_fn, rngs[1], x_val, y_val, d_params)
 
-        print(f"Epoch: {epoch}, Step: {global_step}, val_loss:{val_loss:.4f}, loss: {loss:.4f}")
+        # print(f"Epoch: {epoch}, Step: {global_step}, val_loss:{val_loss:.4f}, loss: {loss:.4f}")
 
         if jax.process_index() == 0 and use_wandb:
             wandb.log(
