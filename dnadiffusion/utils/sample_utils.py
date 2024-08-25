@@ -35,6 +35,7 @@ def create_sample(
             diffusion_params,
         )
         sequences = jnp.argmax(sampled_images.reshape(sample_bs, 4, 200), axis=1)
+        # sequences = sampled_images.reshape(sample_bs, 4, 200)
         return sequences, rng
 
     @jax.jit
